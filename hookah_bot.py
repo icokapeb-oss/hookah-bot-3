@@ -1,14 +1,35 @@
 """
-🤖 HOOKAH TASTE BOT - Простой бот для записи вкусов кальянов
-Каждый пользователь хранит свои вкусы индивидуально
+🤖 HOOKAH TASTE BOT - ВЕРСИЯ ДЛЯ RENDER.COM
+С Flask для health check
 """
 
 import os
 import json
 import logging
+import threading
 from datetime import datetime
+from flask import Flask, jsonify
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# ====== НАСТРОЙКА FLASK ДЛЯ RENDER HEALTH CHECK ======
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Hookah Taste Bot is running! Use /start in Telegram"
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy",
+        "service": "hookah-bot",
+        "time": datetime.now().isoformat()
+    }), 200
+
+@app.route('/ping')
+def ping():
+    return "pong", 200
 
 # ====== НАСТРОЙКА ЛОГИРОВАНИЯ ======
 logging.basicConfig(
@@ -44,7 +65,6 @@ def get_user_data(user_id):
     user_id_str = str(user_id)
     
     if user_id_str not in all_data:
-        # Создаем нового пользователя
         all_data[user_id_str] = {
             "name": "",
             "tastes": [],
@@ -92,7 +112,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = get_user_data(user.id)
     
     if not user_data.get("name"):
-        # Пользователь новый - спрашиваем имя
         await update.message.reply_text(
             f"👋 Привет, {user.first_name}!\n"
             f"Я помогу тебе запоминать вкусы кальянов, которые тебе понравились.\n\n"
@@ -100,7 +119,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['waiting_for_name'] = True
     else:
-        # Пользователь уже есть - показываем меню
         await show_main_menu(update, user_data["name"])
 
 async def show_main_menu(update, user_name):
@@ -123,9 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = user.id
     
-    # Проверяем, ждем ли мы имя
     if context.user_data.get('waiting_for_name'):
-        # Сохраняем имя
         set_user_name(user_id, text)
         context.user_data['waiting_for_name'] = False
         
@@ -136,9 +152,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update, text)
         return
     
-    # Проверяем, ждем ли мы вкус
     if context.user_data.get('waiting_for_taste'):
-        # Сохраняем вкус
         save_user_taste(user_id, text)
         context.user_data['waiting_for_taste'] = False
         
@@ -150,7 +164,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update, get_user_data(user_id)["name"])
         return
     
-    # Обработка кнопок меню
     if text == "➕ Добавить вкус":
         context.user_data['waiting_for_taste'] = True
         await update.message.reply_text("Какой вкус кальяна тебе понравился?")
@@ -173,7 +186,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Как тебя теперь звать?")
     
     else:
-        # Если непонятное сообщение
         await start(update, context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,18 +195,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 /start - Начать работу
 /help - Помощь
-/mytastes - Мои вкусы (альтернатива кнопке)
+/mytastes - Мои вкусы
 
 📱 *Кнопки меню:*
 ➕ Добавить вкус - Записать новый вкус
 📋 Мои вкусы - Посмотреть историю
 🔄 Сменить имя - Изменить своё имя
-
-📝 *Как работает:*
-1. При первом запуске бот спросит ваше имя
-2. Вы можете добавлять вкусы кальянов
-3. Все вкусы хранятся с датами
-4. Каждый пользователь видит только свои вкусы
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -218,51 +224,55 @@ async def mytastes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"📊 Всего: {len(user_data['tastes'])} вкусов"
         await update.message.reply_text(response)
 
-# ====== ЗАПУСК БОТА ======
-def main():
-    """Главная функция запуска бота"""
+def run_flask():
+    """Запуск Flask сервера в отдельном потоке"""
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🌐 Starting Flask server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+def run_telegram_bot():
+    """Запуск Telegram бота"""
     print("=" * 60)
     print("🤖 ЗАПУСК HOOKAH TASTE BOT")
     print("=" * 60)
     
-    # Получаем токен из переменной окружения
     TOKEN = os.getenv("TELEGRAM_TOKEN")
     
     if not TOKEN:
         print("❌ ОШИБКА: Не найден TELEGRAM_TOKEN!")
-        print("Добавьте его в переменные окружения:")
-        print("1. На Render.com: Settings → Environment Variables")
-        print("2. Имя: TELEGRAM_TOKEN")
-        print("3. Значение: ваш_токен_от_BotFather")
         return
     
     print(f"✅ Токен получен")
     print(f"📁 Файл данных: {DATA_FILE}")
-    print("⏳ Запускаю бота...")
+    print("⏳ Запускаю Telegram бота...")
     
     try:
-        # Создаем приложение
         application = Application.builder().token(TOKEN).build()
         
-        # Добавляем обработчики команд
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("mytastes", mytastes_command))
-        
-        # Добавляем обработчик текстовых сообщений
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         print("✅ Бот инициализирован успешно!")
-        print("📱 Теперь бот будет работать в Telegram")
-        print("🔗 Отправьте /start вашему боту")
+        print("📱 Отправьте /start вашему боту")
         print("=" * 60)
         
-        # Запускаем бота
         application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
-        print(f"❌ Ошибка при запуске бота: {e}")
-        logger.error(f"Bot error: {e}")
+        print(f"❌ Ошибка Telegram бота: {e}")
+
+# ====== ГЛАВНЫЙ ЗАПУСК ======
+def main():
+    """Запуск всего приложения"""
+    
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Запускаем Telegram бота в основном потоке
+    run_telegram_bot()
 
 if __name__ == '__main__':
     main()
