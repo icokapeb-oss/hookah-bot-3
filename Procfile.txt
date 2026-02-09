@@ -1,1 +1,1 @@
-worker: python hookah_bot.py
+web: python hookah_bot.py
